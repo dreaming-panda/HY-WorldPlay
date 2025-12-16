@@ -28,7 +28,7 @@
 </p>
 
 ## 🔥 新闻
-- 2025年12月17日: 👋 我们发布了 HY-World 1.5 (WorldPlay) 的[技术报告](https://arxiv.org/abs/2507.21809)和[研究论文](https://arxiv.org/abs/2507.21809)，欢迎查看详情并展开讨论！
+- 2025年12月17日: 👋 我们发布了 HY-World 1.5 (WorldPlay) 的[技术报告](https://3d-models.hunyuan.tencent.com/world/world1_5/HYWorld_1.5_Tech_Report.pdf)和[研究论文](https://arxiv.org/abs/2507.21809)，欢迎查看详情并展开讨论！
 - 2025年12月17日: 🤗 我们发布了首个开源、实时交互、长期几何一致性的世界模型 HY-World 1.5 (WorldPlay)！
 
 > 加入我们的 **[微信群](#)** 和 **[Discord](https://discord.gg/dNBrdrGGMa)** 群组进行讨论。
@@ -97,7 +97,7 @@ pip install -r requirements.txt
 
 - Flash Attention: 安装 Flash Attention 以获得更快的推理速度和更低的 GPU 内存消耗。详细的安装说明可参考 [Flash Attention](https://github.com/Dao-AILab/flash-attention)。
 
-- HunyuanVideo-1.5 基础模型: 按照 [HunyuanVideo-1.5 下载说明](https://huggingface.co/tencent/HunyuanVideo-1.5#-download-pretrained-models) 下载预训练的 HunyuanVideo-1.5 模型。在使用 HY-World 1.5 权重之前，需要先下载此基础模型。
+- HunyuanVideo-1.5 基础模型: 按照 [HunyuanVideo-1.5 下载说明](https://huggingface.co/tencent/HunyuanVideo-1.5#-download-pretrained-models) 下载预训练的 HunyuanVideo-1.5 模型。在使用 HY-World 1.5 权重之前,需要先下载此基础模型，其中使用的是 [480P-I2V 模型](https://huggingface.co/tencent/HunyuanVideo-1.5/tree/main/transformer/480p_i2v)。
 
 
 ## 🎮 快速开始

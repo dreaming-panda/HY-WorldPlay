@@ -32,7 +32,7 @@
 </p>
 
 ## 🔥 News
-- December 17, 2025: 👋 We present the [technical report](https://arxiv.org/abs/2507.21809) and [research paper](https://arxiv.org/abs/2507.21809) of HY-World 1.5 (WorldPlay), please check out the details and spark some discussion!
+- December 17, 2025: 👋 We present the [technical report](https://3d-models.hunyuan.tencent.com/world/world1_5/HYWorld_1.5_Tech_Report.pdf) and [research paper](https://arxiv.org/abs/2507.21809) of HY-World 1.5 (WorldPlay), please check out the details and spark some discussion!
 - December 17, 2025: 🤗 We release the first open-source, real-time interactive, and long-term geometric consistent world model, HY-World 1.5 (WorldPlay)!
 
 > Join our **[Wechat](#)** and **[Discord](https://discord.gg/dNBrdrGGMa)** group to discuss and find help from us.
@@ -101,7 +101,7 @@ pip install -r requirements.txt
 
 - Flash Attention: Install Flash Attention for faster inference and reduced GPU memory consumption. Detailed installation instructions are available at [Flash Attention](https://github.com/Dao-AILab/flash-attention).
 
-- HunyuanVideo-1.5 Base Model: Download the pretrained HunyuanVideo-1.5 model following the instructions at [HunyuanVideo-1.5 Download](https://huggingface.co/tencent/HunyuanVideo-1.5#-download-pretrained-models). This base model is required before using the HY-World 1.5 checkpoints.
+- HunyuanVideo-1.5 Base Model: Download the pretrained HunyuanVideo-1.5 model following the instructions at [HunyuanVideo-1.5 Download](https://huggingface.co/tencent/HunyuanVideo-1.5#-download-pretrained-models). This base model is required before using the HY-World 1.5 checkpoints. Specifically, we use the [480P-I2V model](https://huggingface.co/tencent/HunyuanVideo-1.5/tree/main/transformer/480p_i2v).
 
 
 ## 🎮 Quick Start
