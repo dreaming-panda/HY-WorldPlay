@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/teaser.png">
 
-<h1>🎮 HY-World 1.5: 实时延迟和几何一致性的交互式世界建模系统框架</h1>
+<h1>🎮 HY-World 1.5: 实时、几何一致的交互式世界建模系统框架</h1>
 
 
 
