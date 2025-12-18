@@ -1270,7 +1270,6 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
             )
             self.attn_param["layer-name"] = f"double_block_{index + 1}"
             if viewmats is not None:
-                img, txt = block.forward_bi(
                 img, txt = block(
                     bi_inference=True,
                     ar_txt_inference=False,
