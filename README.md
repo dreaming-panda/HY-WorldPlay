@@ -167,14 +167,6 @@ BI_ACTION_MODEL_PATH=<path_printed_by_download_script>/bidirectional_model
 AR_DISTILL_ACTION_MODEL_PATH=<path_printed_by_download_script>/ar_distilled_action_model
 ```
 
-### Run Inference
-
-Edit `run.sh` to configure your settings, then run:
-
-```bash
-bash run.sh
-```
-
 ### Configuration Options
 
 In `run.sh`, you can configure:
@@ -191,17 +183,17 @@ In `run.sh`, you can configure:
 
 Uncomment one of the three inference commands in `run.sh`:
 
-1. **Bidirectional Model** (best quality, slower):
+1. **Bidirectional Model**:
    ```bash
    --action_ckpt $BI_ACTION_MODEL_PATH --model_type 'bi'
    ```
 
-2. **Autoregressive Model** (balanced):
+2. **Autoregressive Model**:
    ```bash
    --action_ckpt $AR_ACTION_MODEL_PATH --model_type 'ar'
    ```
 
-3. **Distilled Model** (fastest, real-time capable):
+3. **Distilled Model**:
    ```bash
    --action_ckpt $AR_DISTILL_ACTION_MODEL_PATH --few_step true --num_inference_steps 4 --model_type 'ar'
    ```
@@ -222,6 +214,14 @@ For better prompts, you can enable prompt rewriting with a vLLM server:
 export T2V_REWRITE_BASE_URL="<your_vllm_server_base_url>"
 export T2V_REWRITE_MODEL_NAME="<your_model_name>"
 REWRITE=true  # in run.sh
+```
+
+### Run Inference
+
+After editing `run.sh` to configure your settings, run:
+
+```bash
+bash run.sh
 ```
 
 

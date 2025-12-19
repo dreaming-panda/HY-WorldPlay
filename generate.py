@@ -159,7 +159,7 @@ def camera_center_normalization(w2c):
     return np.linalg.inv(c2w_aligned)
 
 def generate_video(args):
-
+    assert ((args.video_length - 1) // 4 + 1) % 4 == 0, "number of latents must be divisible by 4"
     initialize_infer_state(args)
 
     task = 'i2v' if args.image_path else 't2v'
@@ -202,25 +202,27 @@ def generate_video(args):
         extra_kwargs['reference_image'] = args.image_path
 
     out = pipe(
-            enable_sr=enable_sr,
-            prompt=args.prompt,
-            aspect_ratio=args.aspect_ratio,
-            num_inference_steps=args.num_inference_steps,
-            sr_num_inference_steps=None,
-            video_length=args.video_length,
-            negative_prompt=args.negative_prompt,
-            seed=args.seed,
-            output_type="pt",
-            prompt_rewrite=enable_rewrite,
-            return_pre_sr_video=args.save_pre_sr_video,
-            viewmats=viewmats.unsqueeze(0),
-            Ks=Ks.unsqueeze(0),
-            action=action.unsqueeze(0),
-            few_step=args.few_step,
-            chunk_latent_frames=4 if args.model_type == "ar" else 16,
-            model_type=args.model_type,
-            **extra_kwargs,
-        )
+        enable_sr=enable_sr,
+        prompt=args.prompt,
+        aspect_ratio=args.aspect_ratio,
+        num_inference_steps=args.num_inference_steps,
+        sr_num_inference_steps=None,
+        video_length=args.video_length,
+        negative_prompt=args.negative_prompt,
+        seed=args.seed,
+        output_type="pt",
+        prompt_rewrite=enable_rewrite,
+        return_pre_sr_video=args.save_pre_sr_video,
+        viewmats=viewmats.unsqueeze(0),
+        Ks=Ks.unsqueeze(0),
+        action=action.unsqueeze(0),
+        few_step=args.few_step,
+        chunk_latent_frames=4 if args.model_type == "ar" else 16,
+        model_type=args.model_type,
+        user_height=args.height,
+        user_width=args.width,
+        **extra_kwargs,
+    )
 
     # save video
     if int(os.environ.get('RANK', '0')) == 0:
@@ -338,6 +340,14 @@ def main():
     parser.add_argument(
         '--model_type', type=str, required=True, choices=['bi', 'ar'],
         help='inference bidirectional or autoregressive model. '
+    )
+    parser.add_argument(
+        '--height', type=int, default=None,
+        help='height for generation (recommended to set as 480)'
+    )
+    parser.add_argument(
+        '--width', type=int, default=None,
+        help='width for generation (recommended to set as 832)'
     )
 
     args = parser.parse_args()

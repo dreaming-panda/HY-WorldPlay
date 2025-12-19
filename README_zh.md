@@ -148,10 +148,12 @@ BI_ACTION_MODEL_PATH=            # 我们的 HY-World 1.5 双向模型权重的�
 AR_DISTILL_ACTION_MODEL_PATH=    # 我们的 HY-World 1.5 自回归蒸馏模型权重的路径
 POSE_JSON_PATH=./assets/pose/test_forward_32_latents.json   # 自定义相机轨迹的路径
 NUM_FRAMES=125
+WIDTH=832
+HEIGHT=480
 
 # 更快推理的配置
-# 对于 AR 推理，建议的最大数量是 4。对于双向模型，可以设置为 8。
-N_INFERENCE_GPU=4 # 并行推理 GPU 数量。
+# 建议的最大数量是 8。
+N_INFERENCE_GPU=8 # 并行推理 GPU 数量。
 
 # 更好质量的配置
 REWRITE=false # 启用提示重写。请确保重写 vLLM 服务器已部署和配置。
@@ -172,6 +174,8 @@ torchrun --nproc_per_node=$N_INFERENCE_GPU generate.py  \
   --model_path $MODEL_PATH \
   --action_ckpt $BI_ACTION_MODEL_PATH \
   --few_step false \
+  --width $WIDTH \
+  --height $HEIGHT \
   --model_type 'bi'
 
 # 使用自回归模型推理
@@ -189,6 +193,8 @@ torchrun --nproc_per_node=$N_INFERENCE_GPU generate.py  \
 #  --model_path $MODEL_PATH \
 #  --action_ckpt $AR_ACTION_MODEL_PATH \
 #  --few_step false \
+#  --width $WIDTH \
+#  --height $HEIGHT \
 #  --model_type 'ar'
 
 # 使用自回归蒸馏模型推理
@@ -207,6 +213,8 @@ torchrun --nproc_per_node=$N_INFERENCE_GPU generate.py  \
 #  --action_ckpt $AR_DISTILL_ACTION_MODEL_PATH \
 #  --few_step true \
 #  --num_inference_steps 4 \
+#  --width $WIDTH \
+#  --height $HEIGHT \
 #  --model_type 'ar'
 ```
 
