@@ -805,6 +805,9 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
 
         self.gradient_checkpointing = False
 
+        self.freqs_cos = None
+        self.freqs_sin = None
+        self.max_rope_temporal_size = 32
     def load_hunyuan_state_dict(self, model_path):
         load_key = "module"
         bare_model = "unknown"
@@ -1105,14 +1108,19 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
         )
         self.attn_param['thw'] = [tt, th, tw]
         rope_temporal_size = rope_temporal_size // self.patch_size[0]
-        if freqs_cos is None and freqs_sin is None:
-            freqs_cos, freqs_sin = self.get_rotary_pos_embed((rope_temporal_size, th, tw))
-            per_latent_size = th * tw
-            start_index = start_rope_start_idx * per_latent_size
-            end_index = (start_rope_start_idx + tt) * per_latent_size
-            freqs_cos = freqs_cos[start_index: end_index, ...]
-            freqs_sin = freqs_sin[start_index: end_index, ...]
 
+        
+        if self.freqs_cos is None and self.freqs_sin is None:
+            self.freqs_cos, self.freqs_sin = self.get_rotary_pos_embed((self.max_rope_temporal_size, th, tw))
+
+        
+        per_latent_size = th * tw
+        start_index = start_rope_start_idx * per_latent_size
+        end_index = (start_rope_start_idx + tt) * per_latent_size
+        freqs_cos = self.freqs_cos[start_index: end_index, ...]
+        freqs_sin = self.freqs_sin[start_index: end_index, ...]
+        
+            
         img = self.img_in(img)
 
         action = action.reshape(-1)

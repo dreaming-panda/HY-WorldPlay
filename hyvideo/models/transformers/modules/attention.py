@@ -46,7 +46,7 @@ except Exception:
 from hyvideo.models.transformers.modules.ssta_attention import ssta_3d_attention
 from hyvideo.commons.infer_state import get_infer_state
 
-
+from flash_attn import flash_attn_func
 
 @torch.compiler.disable
 def attention(
@@ -155,7 +155,6 @@ def sequence_parallel_attention_txt(q, k, v,
     if cache_txt:
         t_kv['k_txt'] = encoder_key
         t_kv['v_txt'] = encoder_value
-
     encoder_hidden_states = F.scaled_dot_product_attention(
                                                         encoder_query, 
                                                         encoder_key, 
@@ -203,7 +202,7 @@ def sequence_parallel_attention_vision(q, k, v,
         key = all_to_all_4D(key, sp_group, scatter_dim=2, gather_dim=1)
         value = all_to_all_4D(value, sp_group, scatter_dim=2, gather_dim=1)
 
-    query = query.transpose(1, 2)
+    #query = query.transpose(1, 2)
     key = key.transpose(1, 2)
     value = value.transpose(1, 2)
 
@@ -223,14 +222,24 @@ def sequence_parallel_attention_vision(q, k, v,
     encoder_value = kv_cache[block_idx]['v_txt']
     encoder_key = repeat(encoder_key, 'B H S D->(B R) H S D', R=2)
     encoder_value = repeat(encoder_value, 'B H S D->(B R) H S D', R=2)
-
+    
     key = torch.cat([encoder_key, key], dim=2)
     value = torch.cat([encoder_value, value], dim=2)
 
-    hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
-
+    #print(query.shape, key.shape, value.shape)
+    #hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
+    #print(query.shape, key.shape, value.shape)
+    #exit(0)
+    # print(query.shape, key.transpose(1,2).shape, value.transpose(1,2).shape)
+    # exit(0)
+    hidden_states = flash_attn_func(
+        query,
+        key.transpose(1,2),
+        value.transpose(1,2)
+    )
+    
     # transpose back
-    hidden_states = hidden_states.transpose(1, 2)  # [B, S, H, D]
+    #hidden_states = hidden_states.transpose(1, 2)  # [B, S, H, D]
 
     if enable_sp:
         hidden_states = all_to_all_4D(hidden_states, sp_group, scatter_dim=1, gather_dim=2)

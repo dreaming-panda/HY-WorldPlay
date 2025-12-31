@@ -10,18 +10,18 @@ SEED=1
 ASPECT_RATIO=16:9
 RESOLUTION=480p # Now we only provide the 480p model
 OUTPUT_PATH=./outputs/
-MODEL_PATH=                   # Path to pretrained hunyuanvideo-1.5 model
-AR_ACTION_MODEL_PATH=         # Path to our HY-World 1.5 autoregressive checkpoints
-BI_ACTION_MODEL_PATH=         # Path to our HY-World 1.5 bidirectional checkpoints
-AR_DISTILL_ACTION_MODEL_PATH= # Path to our HY-World 1.5 autoregressive distilled checkpoints
-POSE='w-3 d-3'                # Camera trajectory: pose string (e.g., 'w-3, right-0.5') or JSON file path
+MODEL_PATH=/workspace/hf/hub/models--tencent--HunyuanVideo-1.5/snapshots/9b49404b3f5df2a8f0b31df27a0c7ab872e7b038
+AR_ACTION_MODEL_PATH=/workspace/hf/hub/models--tencent--HY-WorldPlay/snapshots/95036f76df1e446fd046765ddadb868b84b05d8e/ar_model/diffusion_pytorch_model.safetensors
+BI_ACTION_MODEL_PATH=/workspace/hf/hub/models--tencent--HY-WorldPlay/snapshots/95036f76df1e446fd046765ddadb868b84b05d8e/bidirectional_model/diffusion_pytorch_model.safetensors
+AR_DISTILL_ACTION_MODEL_PATH=/workspace/hf/hub/models--tencent--HY-WorldPlay/snapshots/95036f76df1e446fd046765ddadb868b84b05d8e/ar_distilled_action_model/diffusion_pytorch_model.safetensors
+POSE='w-3, d-3'                # Camera trajectory: pose string (e.g., 'w-3, right-0.5') or JSON file path
 NUM_FRAMES=125
 WIDTH=832
 HEIGHT=480
 
 # Configuration for faster inference
 # The maximum number recommended is 8.
-N_INFERENCE_GPU=8 # Parallel inference GPU count.
+N_INFERENCE_GPU=1 # Parallel inference GPU count.
 
 # Configuration for better quality
 REWRITE=false   # Enable prompt rewriting. Please ensure rewrite vLLM server is deployed and configured.
@@ -79,4 +79,6 @@ torchrun --nproc_per_node=$N_INFERENCE_GPU generate.py \
   --action_ckpt $AR_DISTILL_ACTION_MODEL_PATH \
   --few_step true \
   --num_inference_steps 4 \
-  --model_type 'ar' --with-ui
+  --model_type 'ar' \
+  --offloading false \
+  --with-ui

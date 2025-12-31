@@ -235,7 +235,7 @@ def get_nd_rotary_pos_embed(
     grid = get_meshgrid_nd(
         start, *args, dim=len(rope_dim_list)
     )  # [3, W, H, D] / [2, W, H]
-
+    
     if isinstance(theta_rescale_factor, int) or isinstance(theta_rescale_factor, float):
         theta_rescale_factor = [theta_rescale_factor] * len(rope_dim_list)
     elif isinstance(theta_rescale_factor, list) and len(theta_rescale_factor) == 1:
@@ -254,7 +254,9 @@ def get_nd_rotary_pos_embed(
 
     # use 1/ndim of dimensions to encode grid_axis
     embs = []
+   
     for i in range(len(rope_dim_list)):
+
         emb = get_1d_rotary_pos_embed(
             rope_dim_list[i],
             grid[i].reshape(-1),
@@ -264,7 +266,7 @@ def get_nd_rotary_pos_embed(
             interpolation_factor=interpolation_factor[i],
         )  # 2 x [WHD, rope_dim_list[i]]
         embs.append(emb)
-
+        
     if use_real:
         cos = torch.cat([emb[0] for emb in embs], dim=1)  # (WHD, D/2)
         sin = torch.cat([emb[1] for emb in embs], dim=1)  # (WHD, D/2)
@@ -302,6 +304,7 @@ def get_1d_rotary_pos_embed(
         freqs_cis: Precomputed frequency tensor with complex exponential. [S, D/2]
         freqs_cos, freqs_sin: Precomputed frequency tensor with real and imaginary parts separately. [S, D]
     """
+    
     if isinstance(pos, int):
         pos = torch.arange(pos).float()
 

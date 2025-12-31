@@ -78,7 +78,7 @@ from hyvideo.utils.retrieval_context import (
 
 
 from .pipeline_utils import retrieve_timesteps, rescale_noise_cfg
-
+from torch.profiler import profile, record_function, ProfilerActivity
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -1074,23 +1074,53 @@ class HunyuanVideo_1_5_Pipeline(DiffusionPipeline):
                     latents_concat = self.scheduler.scale_model_input(latents_concat, t)
 
                     with torch.autocast(device_type="cuda", dtype=self.target_dtype, enabled=self.autocast_enabled):
-                        noise_pred = self.transformer(
-                            bi_inference=False,
-                            ar_txt_inference=False,
-                            ar_vision_inference=True,
-                            hidden_states=latents_concat,
-                            timestep=timestep_input,
-                            timestep_r=None,
-                            mask_type=task_type,
-                            return_dict=False,
-                            viewmats=viewmats_input.to(self.target_dtype),
-                            Ks=Ks_input.to(self.target_dtype),
-                            action=action_input.to(self.target_dtype),
-                            kv_cache=self._kv_cache,
-                            cache_vision=False,
-                            rope_temporal_size=latents_concat.shape[2] + len(selected_frame_indices),
-                            start_rope_start_idx=len(selected_frame_indices),
-                        )[0]
+                        if start_idx == 28 and i == 3:
+                            with profile(
+                                activities=[
+                                    ProfilerActivity.CPU,
+                                    ProfilerActivity.CUDA,
+                                ],
+                                record_shapes=True,
+                                profile_memory=True,
+                                with_stack=True,
+                            ) as prof:
+                                with record_function("transformer_forward"):
+                                    noise_pred = self.transformer(
+                                        bi_inference=False,
+                                        ar_txt_inference=False,
+                                        ar_vision_inference=True,
+                                        hidden_states=latents_concat,
+                                        timestep=timestep_input,
+                                        timestep_r=None,
+                                        mask_type=task_type,
+                                        return_dict=False,
+                                        viewmats=viewmats_input.to(self.target_dtype),
+                                        Ks=Ks_input.to(self.target_dtype),
+                                        action=action_input.to(self.target_dtype),
+                                        kv_cache=self._kv_cache,
+                                        cache_vision=False,
+                                        rope_temporal_size=latents_concat.shape[2] + len(selected_frame_indices),
+                                        start_rope_start_idx=len(selected_frame_indices),
+                                    )[0]
+                            prof.export_chrome_trace("trace_decode_step.json")
+                        else:
+                            noise_pred = self.transformer(
+                                        bi_inference=False,
+                                        ar_txt_inference=False,
+                                        ar_vision_inference=True,
+                                        hidden_states=latents_concat,
+                                        timestep=timestep_input,
+                                        timestep_r=None,
+                                        mask_type=task_type,
+                                        return_dict=False,
+                                        viewmats=viewmats_input.to(self.target_dtype),
+                                        Ks=Ks_input.to(self.target_dtype),
+                                        action=action_input.to(self.target_dtype),
+                                        kv_cache=self._kv_cache,
+                                        cache_vision=False,
+                                        rope_temporal_size=latents_concat.shape[2] + len(selected_frame_indices),
+                                        start_rope_start_idx=len(selected_frame_indices),
+                                    )[0]
                         if self.do_classifier_free_guidance:
                             noise_pred_uncond = self.transformer(
                                 bi_inference=False,
