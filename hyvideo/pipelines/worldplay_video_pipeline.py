@@ -179,7 +179,7 @@ class HunyuanVideo_1_5_Pipeline(DiffusionPipeline):
             "720p": {"bucket_hw_base_size": 960, "bucket_hw_bucket_stride": 16},
             "1080p": {"bucket_hw_base_size": 1440, "bucket_hw_bucket_stride": 16},
         }
-
+        self.max_num_tokens = 8 * 6148 + 1024
 
     @classmethod
     def _create_scheduler(cls, flow_shift):
@@ -917,12 +917,34 @@ class HunyuanVideo_1_5_Pipeline(DiffusionPipeline):
         return video_length, height, width
 
     def init_kv_cache(self):
-        self._kv_cache = []
-        self._kv_cache_neg = []
+        self._kv_cache = {
+            "txt_offset": 0,
+            "kv_offset": 0,
+            "kv_cache": []
+        }
+        # self._kv_cache_neg = []
         transformer_num_layers = len(self.transformer.double_blocks)
+        heads_num = self.transformer.heads_num
+        head_dim = self.transformer.hidden_size // self.transformer.heads_num
+        
         for i in range(transformer_num_layers):
-            self._kv_cache.append({'k_vision': None, 'v_vision': None, 'k_txt': None, 'v_txt': None})
-            self._kv_cache_neg.append({'k_vision': None, 'v_vision': None, 'k_txt': None, 'v_txt': None})
+            self._kv_cache["kv_cache"].append(
+               {
+                "k": torch.zeros(
+                    (self.max_num_tokens, 2 * heads_num, head_dim),
+                    dtype=torch.bfloat16,
+                    device=self.execution_device
+                ),
+                "v": torch.zeros(
+                    (self.max_num_tokens, 2 * heads_num, head_dim),
+                    dtype=torch.bfloat16,
+                    device=self.execution_device
+                )
+               }
+            )
+            
+            #self._kv_cache.append({'k_vision': None, 'v_vision': None, 'k_txt': None, 'v_txt': None})
+            #self._kv_cache_neg.append({'k_vision': None, 'v_vision': None, 'k_txt': None, 'v_txt': None})
 
     def ar_rollout(
         self,
@@ -950,7 +972,7 @@ class HunyuanVideo_1_5_Pipeline(DiffusionPipeline):
                 "byt5_text_mask": extra_kwargs["byt5_text_mask"][positive_idx, None, ...],
             }
             t_expand_txt = torch.tensor([0]).to(device).to(latents.dtype)
-            self._kv_cache = self.transformer(
+            self.transformer(
                 bi_inference=False,
                 ar_txt_inference=True,
                 ar_vision_inference=False,
@@ -963,25 +985,26 @@ class HunyuanVideo_1_5_Pipeline(DiffusionPipeline):
                 kv_cache=self._kv_cache,
                 cache_txt=True,
             )
-            if self.do_classifier_free_guidance:
-                extra_kwargs_neg = {
-                    "byt5_text_states": extra_kwargs["byt5_text_states"][0, None, ...],
-                    "byt5_text_mask": extra_kwargs["byt5_text_mask"][0, None, ...],
-                }
-                t_expand_txt = torch.tensor([0]).to(device).to(latents.dtype)
-                self._kv_cache_neg = self.transformer(
-                    bi_inference=False,
-                    ar_txt_inference=True,
-                    ar_vision_inference=False,
-                    timestep_txt=t_expand_txt,
-                    text_states=prompt_embeds[0, None, ...],
-                    encoder_attention_mask=prompt_mask[0, None, ...],
-                    vision_states=vision_states[0, None, ...],
-                    mask_type=task_type,
-                    extra_kwargs=extra_kwargs_neg,
-                    kv_cache=self._kv_cache_neg,
-                    cache_txt=True,
-                )
+            
+            # if self.do_classifier_free_guidance:
+            #     extra_kwargs_neg = {
+            #         "byt5_text_states": extra_kwargs["byt5_text_states"][0, None, ...],
+            #         "byt5_text_mask": extra_kwargs["byt5_text_mask"][0, None, ...],
+            #     }
+            #     t_expand_txt = torch.tensor([0]).to(device).to(latents.dtype)
+            #     self._kv_cache_neg = self.transformer(
+            #         bi_inference=False,
+            #         ar_txt_inference=True,
+            #         ar_vision_inference=False,
+            #         timestep_txt=t_expand_txt,
+            #         text_states=prompt_embeds[0, None, ...],
+            #         encoder_attention_mask=prompt_mask[0, None, ...],
+            #         vision_states=vision_states[0, None, ...],
+            #         mask_type=task_type,
+            #         extra_kwargs=extra_kwargs_neg,
+            #         kv_cache=self._kv_cache_neg,
+            #         cache_txt=True,
+            #     )
 
         selected_frame_indices = []
 
@@ -1017,7 +1040,7 @@ class HunyuanVideo_1_5_Pipeline(DiffusionPipeline):
                 # compute kv cache
                 with (torch.autocast(device_type="cuda", dtype=self.target_dtype, enabled=self.autocast_enabled),
                       auto_offload_model(self.transformer, self.execution_device,enabled=self.enable_offloading)):
-                    self._kv_cache = self.transformer(
+                    self.transformer(
                         bi_inference=False,
                         ar_txt_inference=False,
                         ar_vision_inference=True,
@@ -1034,24 +1057,24 @@ class HunyuanVideo_1_5_Pipeline(DiffusionPipeline):
                         rope_temporal_size=context_latents_input.shape[2],
                         start_rope_start_idx=0,
                     )
-                    if self.do_classifier_free_guidance:
-                        self._kv_cache_neg = self.transformer(
-                            bi_inference=False,
-                            ar_txt_inference=False,
-                            ar_vision_inference=True,
-                            hidden_states=context_latents_input,
-                            timestep=context_timestep,
-                            timestep_r=None,
-                            mask_type=task_type,
-                            return_dict=False,
-                            viewmats=context_viewmats.to(self.target_dtype),
-                            Ks=context_Ks.to(self.target_dtype),
-                            action=context_action.to(self.target_dtype),
-                            kv_cache=self._kv_cache_neg,
-                            cache_vision=True,
-                            rope_temporal_size=context_latents_input.shape[2],
-                            start_rope_start_idx=0,
-                        )
+                    # if self.do_classifier_free_guidance:
+                    #     self._kv_cache_neg = self.transformer(
+                    #         bi_inference=False,
+                    #         ar_txt_inference=False,
+                    #         ar_vision_inference=True,
+                    #         hidden_states=context_latents_input,
+                    #         timestep=context_timestep,
+                    #         timestep_r=None,
+                    #         mask_type=task_type,
+                    #         return_dict=False,
+                    #         viewmats=context_viewmats.to(self.target_dtype),
+                    #         Ks=context_Ks.to(self.target_dtype),
+                    #         action=context_action.to(self.target_dtype),
+                    #         kv_cache=self._kv_cache_neg,
+                    #         cache_vision=True,
+                    #         rope_temporal_size=context_latents_input.shape[2],
+                    #         start_rope_start_idx=0,
+                    #     )
 
                 self.scheduler.set_timesteps(self.num_inference_steps, device=device)
 
@@ -1121,24 +1144,24 @@ class HunyuanVideo_1_5_Pipeline(DiffusionPipeline):
                                         rope_temporal_size=latents_concat.shape[2] + len(selected_frame_indices),
                                         start_rope_start_idx=len(selected_frame_indices),
                                     )[0]
-                        if self.do_classifier_free_guidance:
-                            noise_pred_uncond = self.transformer(
-                                bi_inference=False,
-                                ar_txt_inference=False,
-                                ar_vision_inference=True,
-                                hidden_states=latents_concat,
-                                timestep=timestep_input,
-                                timestep_r=None,
-                                mask_type=task_type,
-                                return_dict=False,
-                                viewmats=viewmats_input.to(self.target_dtype),
-                                Ks=Ks_input.to(self.target_dtype),
-                                action=action_input.to(self.target_dtype),
-                                kv_cache=self._kv_cache_neg,
-                                cache_vision=False,
-                                rope_temporal_size=latents_concat.shape[2] + len(selected_frame_indices),
-                                start_rope_start_idx=len(selected_frame_indices),
-                            )[0]
+                        # if self.do_classifier_free_guidance:
+                        #     noise_pred_uncond = self.transformer(
+                        #         bi_inference=False,
+                        #         ar_txt_inference=False,
+                        #         ar_vision_inference=True,
+                        #         hidden_states=latents_concat,
+                        #         timestep=timestep_input,
+                        #         timestep_r=None,
+                        #         mask_type=task_type,
+                        #         return_dict=False,
+                        #         viewmats=viewmats_input.to(self.target_dtype),
+                        #         Ks=Ks_input.to(self.target_dtype),
+                        #         action=action_input.to(self.target_dtype),
+                        #         kv_cache=self._kv_cache_neg,
+                        #         cache_vision=False,
+                        #         rope_temporal_size=latents_concat.shape[2] + len(selected_frame_indices),
+                        #         start_rope_start_idx=len(selected_frame_indices),
+                        #     )[0]
 
                     if self.do_classifier_free_guidance:
                         noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred - noise_pred_uncond)
