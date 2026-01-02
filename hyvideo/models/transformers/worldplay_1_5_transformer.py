@@ -39,6 +39,18 @@ from hyvideo.models.text_encoders.byT5 import ByT5Mapper
 from hyvideo.commons.parallel_states import get_parallel_state
 
 from hyvideo.prope.camera_rope import prope_qkv, _apply_tiled_projmat, _prepare_apply_fns_all_dim
+import flashinfer
+def qk_norm(
+    hidden_states: torch.Tensor,
+    layernorm_variance_epsilon: float,
+    layernorm_weight: torch.Tensor,
+):  
+    b, s, h, d = hidden_states.shape
+    hidden_states = hidden_states.reshape(b * s * h, d)
+    hidden_states = flashinfer.rmsnorm(hidden_states, layernorm_weight, layernorm_variance_epsilon)
+    hidden_states = hidden_states.reshape(b, s, h, d)
+    return hidden_states
+
 
 def is_blocks(n: str, m) -> bool:
     print('is_blocks', n, flush=True)
@@ -178,8 +190,10 @@ class MMDoubleStreamBlock(nn.Module):
         img_q = rearrange(img_q, "B L (H D) -> B L H D", H=self.heads_num)
         img_k = rearrange(img_k, "B L (H D) -> B L H D", H=self.heads_num)
         img_v = rearrange(img_v, "B L (H D) -> B L H D", H=self.heads_num)
-        img_q = self.img_attn_q_norm(img_q).to(img_v)
-        img_k = self.img_attn_k_norm(img_k).to(img_v)
+        
+        img_q = qk_norm(img_q, self.img_attn_q_norm.eps, self.img_attn_q_norm.weight)
+        img_k = qk_norm(img_k, self.img_attn_k_norm.eps, self.img_attn_k_norm.weight)
+        
         return img_q, img_k, img_v, img_mod1_gate, img_mod2_shift, img_mod2_scale, img_mod2_gate
 
     @torch_compile_wrapper()
@@ -228,6 +242,7 @@ class MMDoubleStreamBlock(nn.Module):
             Mkv: torch.Tensor,
             Mo: torch.Tensor,
             freqs_cis: tuple = None,
+            pos: torch.Tensor = None,
             attn_param=None,
             block_idx=None,
             viewmats: Optional[torch.Tensor] = None,
@@ -237,17 +252,7 @@ class MMDoubleStreamBlock(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         img_q, img_k, img_v, img_mod1_gate, img_mod2_shift, img_mod2_scale, img_mod2_gate = self.modulate_img(vec, img)
 
-        # add camera pose through prope
-        # delete rope components (original attn included)
         
-        # img_q_prope, img_k_prope, img_v_prope, apply_fn_o = prope_qkv(
-        #     img_q.permute(0, 2, 1, 3),
-        #     img_k.permute(0, 2, 1, 3),
-        #     img_v.permute(0, 2, 1, 3),
-        #     viewmats=viewmats,
-        #     Ks=Ks,
-        # )  # [batch, num_heads, seqlen, head_dim]
-
         b, s, h, d = img_q.shape
         
         dMq = Mq.shape[-2]
@@ -265,25 +270,28 @@ class MMDoubleStreamBlock(nn.Module):
         img_v_prope = torch.matmul(img_v_prope, Mkv)
         img_v_prope = img_v_prope.reshape(b, s, h, d)
         
+        img_q = img_q.reshape(s, h, d)
+        img_k = img_k.reshape(s, h, d)
+        #cos_sin_cache = torch.cat([freqs_cis[0], freqs_cis[1]], dim=1)
+        flashinfer.rope.apply_rope_with_cos_sin_cache_inplace(
+            pos,
+            img_q,
+            img_k,
+            d,
+            freqs_cis,
+            False
+        )
+        img_q = img_q.reshape(b, s, h, d)
+        img_k = img_k.reshape(b, s, h, d)
         
-        
-        
-        # img_q_prope = _apply_tiled_projmat(img_q.permute(0, 2, 1, 3), Mq)
-        # img_k_prope = _apply_tiled_projmat(img_k.permute(0, 2, 1, 3), Mkv)
-        # img_v_prope = _apply_tiled_projmat(img_v.permute(0, 2, 1, 3), Mkv)
-        
-        # img_q_prope = img_q_prope.permute(0, 2, 1, 3)  # [batch, seqlen, num_heads, head_dim]
-        # img_k_prope = img_k_prope.permute(0, 2, 1, 3)  # [batch, seqlen, num_heads, head_dim]
-        # img_v_prope = img_v_prope.permute(0, 2, 1, 3)  # [batch, seqlen, num_heads, head_dim]
-
-        
-        
-        if freqs_cis is not None:
-            img_qq, img_kk = apply_rotary_emb(img_q, img_k, freqs_cis, head_first=False)
-            assert (
-                    img_qq.shape == img_q.shape and img_kk.shape == img_k.shape
-            ), f"img_kk: {img_qq.shape}, img_q: {img_q.shape}, img_kk: {img_kk.shape}, img_k: {img_k.shape}"
-            img_q, img_k = img_qq, img_kk
+        # print(sin_cos_cache.shape)
+        # exit(0)
+        # if freqs_cis is not None:
+        #     img_qq, img_kk = apply_rotary_emb(img_q, img_k, freqs_cis, head_first=False)
+        #     assert (
+        #             img_qq.shape == img_q.shape and img_kk.shape == img_k.shape
+        #     ), f"img_kk: {img_qq.shape}, img_q: {img_q.shape}, img_kk: {img_kk.shape}, img_k: {img_k.shape}"
+        #     img_q, img_k = img_qq, img_kk
 
         img_attn, img_attn_prope = sequence_parallel_attention_vision(
             (img_q, img_q_prope),
@@ -838,8 +846,9 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
 
         self.gradient_checkpointing = False
 
-        self.freqs_cos = None
-        self.freqs_sin = None
+        self.cos_sin_cache = None
+        self.grid = None
+        self.pos = None
         self.max_rope_temporal_size = 32
         self.head_dim = self.hidden_size // self.heads_num
         
@@ -902,14 +911,14 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
         assert (
             sum(rope_dim_list) == head_dim
         ), "sum(rope_dim_list) should equal to head_dim of attention layer"
-        freqs_cos, freqs_sin = get_nd_rotary_pos_embed(
+        freqs_cos, freqs_sin, grid = get_nd_rotary_pos_embed(
             rope_dim_list,
             rope_sizes,
             theta=self.rope_theta,
             use_real=True,
             theta_rescale_factor=1,
         )
-        return freqs_cos, freqs_sin
+        return freqs_cos, freqs_sin, grid
 
     def reorder_txt_token(self, byt5_txt, txt, byt5_text_mask, text_mask, zero_feat=False, is_reorder=True):
         if is_reorder:
@@ -1126,13 +1135,7 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
         rope_temporal_size=4,
         start_rope_start_idx=0,
     ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
-        # if cache_vision:
-        #     _kv_cache_new = []
-        #     transformer_num_layers = len(self.double_blocks)
-        #     for i in range(transformer_num_layers):
-        #         _kv_cache_new.append({'k_vision': None, 'v_vision': None,
-        #                               'k_txt': kv_cache[i]['k_txt'], 'v_txt': kv_cache[i]['v_txt']})
-
+        
         img = x = hidden_states
         t = timestep
         bs, _, ot, oh, ow = x.shape
@@ -1145,17 +1148,22 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
         rope_temporal_size = rope_temporal_size // self.patch_size[0]
 
         
-        if self.freqs_cos is None and self.freqs_sin is None:
-            self.freqs_cos, self.freqs_sin = self.get_rotary_pos_embed((self.max_rope_temporal_size, th, tw))
-
+        if self.cos_sin_cache is None and self.grid is None:
+            freqs_cos, freqs_sin, self.grid = self.get_rotary_pos_embed((self.max_rope_temporal_size, th, tw))
+            freqs_cos = freqs_cos.to(hidden_states.device)
+            freqs_sin = freqs_sin.to(hidden_states.device)
+            self.cos_sin_cache = torch.cat([freqs_cos, freqs_sin], dim=1)
+            self.pos = torch.arange(0, freqs_cos.shape[0], dtype=torch.int32, device=freqs_cos.device)
+            
         
         per_latent_size = th * tw
         start_index = start_rope_start_idx * per_latent_size
         end_index = (start_rope_start_idx + tt) * per_latent_size
-        freqs_cos = self.freqs_cos[start_index: end_index, ...]
-        freqs_sin = self.freqs_sin[start_index: end_index, ...]
+        #freqs_cos = self.freqs_cos[start_index: end_index, ...]
+        #freqs_sin = self.freqs_sin[start_index: end_index, ...]
         
-            
+        pos = self.pos[start_index: end_index]
+        
         img = self.img_in(img)
 
         action = action.reshape(-1)
@@ -1190,8 +1198,8 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
             Ks = torch.chunk(Ks, sp_size, dim=1)[sp_rank]
         else:
             vec = rearrange(vec, 'B S C->(B S) C')
-
-        freqs_cis = (freqs_cos, freqs_sin) if freqs_cos is not None else None
+        
+        #freqs_cis = (self.freqs_cos, self.freqs_sin) if freqs_cos is not None else None
         Mq, Mkv, Mo = _prepare_apply_fns_all_dim(
              head_dim=self.head_dim,
              viewmats=viewmats,
@@ -1214,7 +1222,8 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
                 Mq=Mq,
                 Mkv=Mkv,
                 Mo=Mo,
-                freqs_cis=freqs_cis,
+                freqs_cis=self.cos_sin_cache,
+                pos=pos,
                 attn_param=self.attn_param,
                 block_idx=index,
                 viewmats=viewmats,

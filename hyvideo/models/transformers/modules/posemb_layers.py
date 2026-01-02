@@ -179,8 +179,10 @@ def apply_rotary_emb(
     """
     xk_out = None
     if isinstance(freqs_cis, tuple):
+        
         cos, sin = reshape_for_broadcast(freqs_cis, xq, head_first)  # [S, D]
         cos, sin = cos.to(xq.device), sin.to(xq.device)
+        
         # real * cos - imag * sin
         # imag * cos + real * sin
         xq_out = (xq.float() * cos + rotate_half(xq.float()) * sin).type_as(xq)
@@ -265,15 +267,16 @@ def get_nd_rotary_pos_embed(
             theta_rescale_factor=theta_rescale_factor[i],
             interpolation_factor=interpolation_factor[i],
         )  # 2 x [WHD, rope_dim_list[i]]
-        embs.append(emb)
         
+        embs.append(emb)
+    
     if use_real:
         cos = torch.cat([emb[0] for emb in embs], dim=1)  # (WHD, D/2)
         sin = torch.cat([emb[1] for emb in embs], dim=1)  # (WHD, D/2)
-        return cos, sin
+        return cos, sin, grid
     else:
         emb = torch.cat(embs, dim=1)  # (WHD, D/2)
-        return emb
+        return emb, grid
 
 
 def get_1d_rotary_pos_embed(
@@ -307,7 +310,7 @@ def get_1d_rotary_pos_embed(
     
     if isinstance(pos, int):
         pos = torch.arange(pos).float()
-
+    
     # proposed by reddit user bloc97, to rescale rotary embeddings to longer sequence length without fine-tuning
     # has some connection to NTK literature
     if theta_rescale_factor != 1.0:
@@ -319,8 +322,10 @@ def get_1d_rotary_pos_embed(
     # assert interpolation_factor == 1.0, f"interpolation_factor: {interpolation_factor}"
     freqs = torch.outer(pos * interpolation_factor, freqs)  # [S, D/2]
     if use_real:
-        freqs_cos = freqs.cos().repeat_interleave(2, dim=1)  # [S, D]
-        freqs_sin = freqs.sin().repeat_interleave(2, dim=1)  # [S, D]
+        #freqs_cos = freqs.cos().repeat_interleave(2, dim=1)  # [S, D]
+        #freqs_sin = freqs.sin().repeat_interleave(2, dim=1)  # [S, D]
+        freqs_cos = freqs.float().cos()  # [S, D]
+        freqs_sin = freqs.float().sin()  # [S, D]
         return freqs_cos, freqs_sin
     else:
         freqs_cis = torch.polar(
