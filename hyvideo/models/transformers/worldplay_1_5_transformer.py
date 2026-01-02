@@ -38,7 +38,7 @@ from hyvideo.utils.infer_utils import torch_compile_wrapper
 from hyvideo.models.text_encoders.byT5 import ByT5Mapper
 from hyvideo.commons.parallel_states import get_parallel_state
 
-from hyvideo.prope.camera_rope import prope_qkv
+from hyvideo.prope.camera_rope import prope_qkv, _apply_tiled_projmat, _prepare_apply_fns_all_dim
 
 def is_blocks(n: str, m) -> bool:
     print('is_blocks', n, flush=True)
@@ -97,6 +97,7 @@ class MMDoubleStreamBlock(nn.Module):
         self.img_attn_proj = nn.Linear(hidden_size, hidden_size, bias=qkv_bias, **factory_kwargs)
 
         self.img_norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6, **factory_kwargs)
+        
         self.img_mlp = MLP(
             hidden_size, mlp_hidden_dim, act_layer=get_activation_layer(mlp_act_type), bias=True, **factory_kwargs
         )
@@ -223,6 +224,9 @@ class MMDoubleStreamBlock(nn.Module):
             self,
             img: torch.Tensor,
             vec: torch.Tensor,
+            Mq: torch.Tensor,
+            Mkv: torch.Tensor,
+            Mo: torch.Tensor,
             freqs_cis: tuple = None,
             attn_param=None,
             block_idx=None,
@@ -235,17 +239,45 @@ class MMDoubleStreamBlock(nn.Module):
 
         # add camera pose through prope
         # delete rope components (original attn included)
-        img_q_prope, img_k_prope, img_v_prope, apply_fn_o = prope_qkv(
-            img_q.permute(0, 2, 1, 3),
-            img_k.permute(0, 2, 1, 3),
-            img_v.permute(0, 2, 1, 3),
-            viewmats=viewmats,
-            Ks=Ks,
-        )  # [batch, num_heads, seqlen, head_dim]
-        img_q_prope = img_q_prope.permute(0, 2, 1, 3)  # [batch, seqlen, num_heads, head_dim]
-        img_k_prope = img_k_prope.permute(0, 2, 1, 3)  # [batch, seqlen, num_heads, head_dim]
-        img_v_prope = img_v_prope.permute(0, 2, 1, 3)  # [batch, seqlen, num_heads, head_dim]
+        
+        # img_q_prope, img_k_prope, img_v_prope, apply_fn_o = prope_qkv(
+        #     img_q.permute(0, 2, 1, 3),
+        #     img_k.permute(0, 2, 1, 3),
+        #     img_v.permute(0, 2, 1, 3),
+        #     viewmats=viewmats,
+        #     Ks=Ks,
+        # )  # [batch, num_heads, seqlen, head_dim]
 
+        b, s, h, d = img_q.shape
+        
+        dMq = Mq.shape[-2]
+        dMkv = Mkv.shape[-2]
+
+        img_q_prope = img_q.reshape(s, h * d // dMq, dMq)
+        img_q_prope = torch.matmul(img_q_prope, Mq)
+        img_q_prope = img_q_prope.reshape(b, s, h, d)
+
+        img_k_prope = img_k.reshape(s, h * d // dMkv, dMkv)
+        img_k_prope = torch.matmul(img_k_prope, Mkv)
+        img_k_prope = img_k_prope.reshape(b, s, h, d)
+
+        img_v_prope = img_v.reshape(s, h * d // dMkv, dMkv)
+        img_v_prope = torch.matmul(img_v_prope, Mkv)
+        img_v_prope = img_v_prope.reshape(b, s, h, d)
+        
+        
+        
+        
+        # img_q_prope = _apply_tiled_projmat(img_q.permute(0, 2, 1, 3), Mq)
+        # img_k_prope = _apply_tiled_projmat(img_k.permute(0, 2, 1, 3), Mkv)
+        # img_v_prope = _apply_tiled_projmat(img_v.permute(0, 2, 1, 3), Mkv)
+        
+        # img_q_prope = img_q_prope.permute(0, 2, 1, 3)  # [batch, seqlen, num_heads, head_dim]
+        # img_k_prope = img_k_prope.permute(0, 2, 1, 3)  # [batch, seqlen, num_heads, head_dim]
+        # img_v_prope = img_v_prope.permute(0, 2, 1, 3)  # [batch, seqlen, num_heads, head_dim]
+
+        
+        
         if freqs_cis is not None:
             img_qq, img_kk = apply_rotary_emb(img_q, img_k, freqs_cis, head_first=False)
             assert (
@@ -262,10 +294,11 @@ class MMDoubleStreamBlock(nn.Module):
             cache_vision=cache_vision,
         )
 
-        img_attn_prope = rearrange(img_attn_prope, "B L (H D) -> B H L D", H=self.heads_num)
-        img_attn_prope = apply_fn_o(img_attn_prope)  # [batch, num_heads, seqlen, head_dim]
-        img_attn_prope = rearrange(img_attn_prope, "B H L D -> B L (H D)")
-
+        dMo = Mo.shape[-2]
+        
+        img_attn_prope = img_attn_prope.reshape(s, h * d // dMo, dMo)
+        img_attn_prope = torch.matmul(img_attn_prope, Mo)
+        img_attn_prope = img_attn_prope.reshape(b, s, h * d)
         img = img + apply_gate(self.img_attn_proj(img_attn) + self.img_attn_prope_proj(img_attn_prope),
                                gate=img_mod1_gate)
         img = img + apply_gate(
@@ -808,6 +841,8 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
         self.freqs_cos = None
         self.freqs_sin = None
         self.max_rope_temporal_size = 32
+        self.head_dim = self.hidden_size // self.heads_num
+        
     def load_hunyuan_state_dict(self, model_path):
         load_key = "module"
         bare_model = "unknown"
@@ -1157,7 +1192,15 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
             vec = rearrange(vec, 'B S C->(B S) C')
 
         freqs_cis = (freqs_cos, freqs_sin) if freqs_cos is not None else None
-
+        Mq, Mkv, Mo = _prepare_apply_fns_all_dim(
+             head_dim=self.head_dim,
+             viewmats=viewmats,
+             Ks=Ks,
+             patches_x=None,
+             patches_y=None,
+             image_width=None,
+             image_height=None
+        )
         # Pass through double-stream blocks
         for index, block in enumerate(self.double_blocks):
             self.attn_param["layer-name"] = f"double_block_{index + 1}"
@@ -1168,6 +1211,9 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
                 ar_vision_inference=True,
                 img=img,
                 vec=vec,
+                Mq=Mq,
+                Mkv=Mkv,
+                Mo=Mo,
                 freqs_cis=freqs_cis,
                 attn_param=self.attn_param,
                 block_idx=index,

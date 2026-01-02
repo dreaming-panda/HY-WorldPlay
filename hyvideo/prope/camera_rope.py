@@ -109,7 +109,7 @@ def prope_qkv(
     query = apply_fn_q(q)
     key = apply_fn_kv(k)
     value = apply_fn_kv(v)
-
+    #value = v
     return query, key, value, apply_fn_o
 
 
@@ -165,20 +165,22 @@ def _prepare_apply_fns_all_dim(
 
     # Block-diagonal transforms to the inputs and outputs of the attention operator.
     assert head_dim % 4 == 0
-    transforms_q = [
-        (partial(_apply_tiled_projmat, matrix=P_T), head_dim),
-    ]
-    transforms_kv = [
-        (partial(_apply_tiled_projmat, matrix=P_inv), head_dim),
-    ]
-    transforms_o = [
-        (partial(_apply_tiled_projmat, matrix=P), head_dim),
-    ]
 
-    apply_fn_q = partial(_apply_block_diagonal, func_size_pairs=transforms_q)
-    apply_fn_kv = partial(_apply_block_diagonal, func_size_pairs=transforms_kv)
-    apply_fn_o = partial(_apply_block_diagonal, func_size_pairs=transforms_o)
-    return apply_fn_q, apply_fn_kv, apply_fn_o
+    Mq = P_T.transpose(-1, -2).squeeze(0)
+    Mkv = P_inv.transpose(-1, -2).squeeze(0)
+    Mo = P.transpose(-1, -2).squeeze(0)
+    #Mo_eff = Mkv @ Mo 
+    # transforms_q = (partial(_apply_tiled_projmat, matrix=Mq), head_dim)
+    
+    # transforms_kv = (partial(_apply_tiled_projmat, matrix=Mkv), head_dim)
+    
+    # transforms_o = (partial(_apply_tiled_projmat, matrix=Mo), head_dim)
+    
+
+    # apply_fn_q = partial(_apply_block_diagonal, func_size_pairs=transforms_q)
+    # apply_fn_kv = partial(_apply_block_diagonal, func_size_pairs=transforms_kv)
+    # apply_fn_o = partial(_apply_block_diagonal, func_size_pairs=transforms_o)
+    return Mq, Mkv, Mo
 
 
 def _apply_tiled_projmat(
@@ -189,21 +191,52 @@ def _apply_tiled_projmat(
     # - seqlen => (cameras, patches_x * patches_y)
     # - feat_dim => (feat_dim // 4, 4)
     (batch, num_heads, seqlen, feat_dim) = feats.shape
-    cameras = matrix.shape[1]
+    cameras = matrix.shape[0]
     assert seqlen >= cameras and seqlen % cameras == 0
+    assert seqlen == cameras
     D = matrix.shape[-1]
-    assert matrix.shape == (batch, cameras, D, D)
+    assert matrix.shape == (cameras, D, D)
     assert feat_dim % D == 0
-    return torch.einsum(
-        "bcij,bncpkj->bncpki",
-        matrix,
-        feats.reshape((batch, num_heads, cameras, -1, feat_dim // D, D)),
-    ).reshape(feats.shape)
+    
+    #feats = feats[0].transpose(0, 1).reshape(seqlen, num_heads * feat_dim // D, D)
+    #output = torch.bmm(feats, matrix[0])
+    
+    #return output.reshape(batch, seqlen, num_heads, feat_dim).transpose(1, 2)
+    # feats_r = feats.reshape(num_heads, cameras, feat_dim // D, D)
+
+    # return torch.matmul(
+    #     feats_r,                     # [n, c, k, j]
+    #     matrix.transpose(-1, -2)   # [1, c, j, i]
+    # ).reshape(feats.shape)
+
+    feats_r = feats.reshape(num_heads, cameras, feat_dim // D, D)   # [n, c, k, j]
+
+    # 让 camera 维变成 batch： [c, n, k, j] -> [c, (n*k), j]
+    feats_cNkJ = feats_r.permute(1, 0, 2, 3).reshape(cameras, -1, D)  # [c, n*k, j]
+    
+    # matrix: [1, c, j, i] -> 去掉前面的 1，变成 [c, j, i]
+    #mat_cJi = matrix.transpose(-1, -2).squeeze(0)  # 如果你原 matrix 是 [1,c,i,j]，这行后是 [c, j, i]
+    
+    # batched matmul over c: [c, n*k, j] @ [c, j, i] -> [c, n*k, i]
+    out_cNkI = torch.matmul(feats_cNkJ, matrix)   # [c, n*k, i]
+    
+    # reshape 回 [n, c, k, i] 再 flatten 回 feats.shape
+    out = (
+        out_cNkI.reshape(cameras, num_heads, feat_dim // D, D)
+                .permute(1, 0, 2, 3)               # [n, c, k, i]
+                .reshape(feats.shape)
+    )
+    return out
+    # return torch.einsum(
+    #      "cij,nckj->ncki",
+    #      matrix[0],
+    #      feats.reshape((num_heads, cameras, feat_dim // D, D)),
+    # ).reshape(feats.shape)
 
 
 def _apply_block_diagonal(
     feats: torch.Tensor,  # (..., dim)
-    func_size_pairs: List[Tuple[Callable[[torch.Tensor], torch.Tensor], int]],
+    func_size_pairs: Tuple[Callable[[torch.Tensor], torch.Tensor], int],
 ) -> torch.Tensor:
     """Apply a block-diagonal function to an input array.
 
@@ -213,13 +246,14 @@ def _apply_block_diagonal(
 
     Where the integer is the size of the input to the function.
     """
-    funcs, block_sizes = zip(*func_size_pairs)
-    assert feats.shape[-1] == sum(block_sizes)
-    x_blocks = torch.split(feats, block_sizes, dim=-1)
-    out = torch.cat(
-        [f(x_block) for f, x_block in zip(funcs, x_blocks)],
-        dim=-1,
-    )
+    func, block_sizes = func_size_pairs
+    assert feats.shape[-1] == block_sizes
+    # x_blocks = torch.split(feats, block_sizes, dim=-1)
+    # out = torch.cat(
+    #     [f(x_block) for f, x_block in zip(funcs, x_blocks)],
+    #     dim=-1,
+    # )
+    out = func(feats)
     assert out.shape == feats.shape, "Input/output shapes should match."
     return out
 
