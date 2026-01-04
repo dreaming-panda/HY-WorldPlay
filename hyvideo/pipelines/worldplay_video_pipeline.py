@@ -972,6 +972,9 @@ class HunyuanVideo_1_5_Pipeline(DiffusionPipeline):
                 "byt5_text_mask": extra_kwargs["byt5_text_mask"][positive_idx, None, ...],
             }
             t_expand_txt = torch.tensor([0]).to(device).to(latents.dtype)
+            print(prompt_embeds.shape)
+            print(vision_states.shape)
+            
             self.transformer(
                 bi_inference=False,
                 ar_txt_inference=True,
@@ -985,7 +988,9 @@ class HunyuanVideo_1_5_Pipeline(DiffusionPipeline):
                 kv_cache=self._kv_cache,
                 cache_txt=True,
             )
-            
+
+            print(prompt_embeds.shape)
+            print(vision_states.shape)
             # if self.do_classifier_free_guidance:
             #     extra_kwargs_neg = {
             #         "byt5_text_states": extra_kwargs["byt5_text_states"][0, None, ...],
@@ -1550,7 +1555,7 @@ class HunyuanVideo_1_5_Pipeline(DiffusionPipeline):
                 clip_skip=self.clip_skip,
                 data_type="video",
             )
-
+            #print(prompt_embeds.shape)
         # Encode prompts with second encoder if available
         if self.text_encoder_2 is not None:
             with auto_offload_model(self.text_encoder_2, self.execution_device, enabled=self.enable_offloading):

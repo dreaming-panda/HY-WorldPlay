@@ -32,7 +32,7 @@ from hyvideo.utils.flash_attn_no_pad import (
     flash_attn_no_pad_v3,
 )
 from hyvideo.commons import maybe_fallback_attn_mode
-
+from sageattention import sageattn, sageattn_qk_int8_pv_fp8_cuda_sm90
 try:
     from torch.nn.attention.flex_attention import flex_attention
 
@@ -149,18 +149,8 @@ def sequence_parallel_attention_txt(q, k, v,
         encoder_key = shrink_head(encoder_key, dim=2)
         encoder_value = shrink_head(encoder_value, dim=2)
 
-    #encoder_query = encoder_query.transpose(1, 2)
-    #encoder_key = encoder_key.transpose(1, 2)
-    #encoder_value = encoder_value.transpose(1, 2)
     txt_seq_len = encoder_query.shape[1]
     heads_num = encoder_query.shape[2]
-    # print(encoder_query.dtype)
-    # print(encoder_query.shape)
-    # print(txt_seq_len,head_nums)
-    # print(kv_cache["kv_cache"][block_idx]["k"].shape)
-    # print(kv_cache["kv_cache"][block_idx]["k"][:txt_seq_len][:head_nums].shape)
-    # print(encoder_key[0].shape)
-    # exit(0)
     kv_cache["kv_cache"][block_idx]["k"][:txt_seq_len, :heads_num].copy_(encoder_key[0])
     kv_cache["kv_cache"][block_idx]["k"][:txt_seq_len, heads_num:].copy_(encoder_key[0])
     kv_cache["kv_cache"][block_idx]["v"][:txt_seq_len, :heads_num].copy_(encoder_value[0])
@@ -168,10 +158,6 @@ def sequence_parallel_attention_txt(q, k, v,
     kv_cache["txt_offset"] = txt_seq_len
     kv_cache["kv_offset"] = txt_seq_len
     
-    # t_kv = {}
-    # if cache_txt:
-    #     t_kv['k_txt'] = encoder_key
-    #     t_kv['v_txt'] = encoder_value
 
     encoder_hidden_states = flashinfer.single_prefill_with_kv_cache(
         encoder_query[0], 
@@ -180,15 +166,6 @@ def sequence_parallel_attention_txt(q, k, v,
         causal=False,
         kv_layout="NHD",
         use_fp16_qk_reduction=True)
-
-    
-    # encoder_hidden_states = F.scaled_dot_product_attention(
-    #                                                     encoder_query, 
-    #                                                     encoder_key, 
-    #                                                     encoder_value, 
-    #                                                     dropout_p=0.0, 
-    #                                                     is_causal=False
-    #                                                     )
 
     # transpose back
     encoder_hidden_states = encoder_hidden_states.unsqueeze(0)
@@ -230,8 +207,10 @@ def sequence_parallel_attention_vision(q, k, v,
             kv_cache["kv_cache"][block_idx]["v"][: kv_offset + img_seq_len], 
             causal=False,
             kv_layout="NHD",
-            use_fp16_qk_reduction=True
+            use_fp16_qk_reduction=True,
+            backend="fa3"
         )
+       
         hidden_states = hidden_states.reshape(img_seq_len, 2, heads_num, -1).transpose(0, 1)
 
     else:
@@ -251,69 +230,12 @@ def sequence_parallel_attention_vision(q, k, v,
             kv_cache["kv_cache"][block_idx]["v"][: txt_offset + img_seq_len], 
             causal=False,
             kv_layout="NHD",
-            use_fp16_qk_reduction=True
+            use_fp16_qk_reduction=True,
+            backend="fa3"
         )
+        
         hidden_states = hidden_states.reshape(img_seq_len, 2, heads_num, -1).transpose(0, 1)
         
-    # query = torch.cat([query, query_prope], dim=0)
-    # key = torch.cat([key, key_prope], dim=0)
-    # value = torch.cat([value, value_prope], dim=0)
-
-    # parallel_dims = get_parallel_state()
-    # enable_sp = parallel_dims.sp_enabled
-
-    # if enable_sp:
-    #     sp_group = parallel_dims.sp_group
-
-    # if enable_sp:
-    #     # batch_size, seq_len, attn_heads, head_dim
-    #     query = all_to_all_4D(query, sp_group, scatter_dim=2, gather_dim=1)
-    #     key = all_to_all_4D(key, sp_group, scatter_dim=2, gather_dim=1)
-    #     value = all_to_all_4D(value, sp_group, scatter_dim=2, gather_dim=1)
-
-    # #query = query.transpose(1, 2)
-    # key = key.transpose(1, 2)
-    # value = value.transpose(1, 2)
-
-    # cache_vision_key = kv_cache[block_idx]['k_vision'] # previous key
-    # cache_vision_value = kv_cache[block_idx]['v_vision'] # previous value
-
-    # vision_kv = {}
-    # if cache_vision:
-    #     vision_kv['k_vision'] = key
-    #     vision_kv['v_vision'] = value
-
-    # if not cache_vision and cache_vision_key is not None:
-    #     key = torch.cat([cache_vision_key, key], dim=2)
-    #     value = torch.cat([cache_vision_value, value], dim=2)
-
-    # encoder_key = kv_cache[block_idx]['k_txt']
-    # encoder_value = kv_cache[block_idx]['v_txt']
-    # encoder_key = repeat(encoder_key, 'B H S D->(B R) H S D', R=2)
-    # encoder_value = repeat(encoder_value, 'B H S D->(B R) H S D', R=2)
-    
-    # key = torch.cat([encoder_key, key], dim=2)
-    # value = torch.cat([encoder_value, value], dim=2)
-
-    #print(query.shape, key.shape, value.shape)
-    #hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
-    #print(query.shape, key.shape, value.shape)
-    #exit(0)
-    # print(query.shape, key.transpose(1,2).shape, value.transpose(1,2).shape)
-    # exit(0)
-    # hidden_states = flash_attn_func(
-    #     query,
-    #     key.transpose(1,2),
-    #     value.transpose(1,2)
-    # )
-    
-    # transpose back
-    #hidden_states = hidden_states.transpose(1, 2)  # [B, S, H, D]
-
-    # if enable_sp:
-    #     hidden_states = all_to_all_4D(hidden_states, sp_group, scatter_dim=1, gather_dim=2)
-    #     hidden_states = hidden_states.to(query.dtype)
-
     b, s, a, d = hidden_states.shape
     hidden_states = hidden_states.reshape(b, s, -1)
     hidden_states, hidden_states_prope = torch.chunk(hidden_states, chunks=2, dim=0)

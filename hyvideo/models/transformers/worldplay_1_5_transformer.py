@@ -43,7 +43,7 @@ import flashinfer
 def qk_norm(
     hidden_states: torch.Tensor,
     layernorm_variance_epsilon: float,
-    layernorm_weight: torch.Tensor,
+    layernorm_weight: torch.Tensor
 ):  
     b, s, h, d = hidden_states.shape
     hidden_states = hidden_states.reshape(b * s * h, d)
@@ -136,7 +136,7 @@ class MMDoubleStreamBlock(nn.Module):
         )
 
         self.hybrid_seq_parallel_attn = None
-
+        
     def enable_deterministic(self):
         self.deterministic = True
 
@@ -155,7 +155,7 @@ class MMDoubleStreamBlock(nn.Module):
             txt_mod2_scale,
             txt_mod2_gate,
         ) = self.txt_mod(vec_txt).chunk(6, dim=-1)
-
+        print(txt.shape, vec_txt.shape, txt_modulated.shape, txt_mod1_shift.shape, txt_mod1_scale.shape)
         txt_modulated = self.txt_norm1(txt)
         txt_modulated = modulate(txt_modulated, shift=txt_mod1_shift, scale=txt_mod1_scale)
         txt_q = self.txt_attn_q(txt_modulated)
@@ -171,7 +171,9 @@ class MMDoubleStreamBlock(nn.Module):
     # modulating module for img embedding
     def modulate_img(self,
                      vec,
-                     img):
+                     img,
+                     gamma,
+                     beta):
         (
             img_mod1_shift,
             img_mod1_scale,
@@ -181,7 +183,10 @@ class MMDoubleStreamBlock(nn.Module):
             img_mod2_gate,
         ) = self.img_mod(vec).chunk(6, dim=-1)
 
-        img_modulated = self.img_norm1(img)
+        
+        img_modulated = flashinfer.norm.layernorm(img.contiguous()[0], gamma, beta).unsqueeze(0)
+        
+        #img_modulated = self.img_norm1(img)
         img_modulated = modulate(img_modulated, shift=img_mod1_shift, scale=img_mod1_scale)
 
         img_q = self.img_attn_q(img_modulated)
@@ -208,6 +213,7 @@ class MMDoubleStreamBlock(nn.Module):
             kv_cache: Optional[dict] = None,
             cache_txt: bool = False,
     ) -> Tuple[torch.Tensor]:
+        print(txt.shape, vec_txt.shape)
         (txt_q, txt_k, txt_v, txt_mod1_gate,
          txt_mod2_shift, txt_mod2_scale, txt_mod2_gate) = self.modulate_txt(vec_txt, txt)
 
@@ -225,7 +231,7 @@ class MMDoubleStreamBlock(nn.Module):
             kv_cache=kv_cache,
             cache_txt=cache_txt,
         )
-
+        print(txt_attn.shape, txt_mod1_gate.shape, txt.shape, txt_mod2_shift.shape, txt_mod2_scale.shape)
         txt = txt + apply_gate(self.txt_attn_proj(txt_attn), gate=txt_mod1_gate)
         txt = txt + apply_gate(
             self.txt_mlp(modulate(self.txt_norm2(txt), shift=txt_mod2_shift, scale=txt_mod2_scale)),
@@ -241,6 +247,8 @@ class MMDoubleStreamBlock(nn.Module):
             Mq: torch.Tensor,
             Mkv: torch.Tensor,
             Mo: torch.Tensor,
+            gamma: torch.Tensor,
+            beta: torch.Tensor,
             freqs_cis: tuple = None,
             pos: torch.Tensor = None,
             attn_param=None,
@@ -250,7 +258,7 @@ class MMDoubleStreamBlock(nn.Module):
             kv_cache: Optional[dict] = None,
             cache_vision: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        img_q, img_k, img_v, img_mod1_gate, img_mod2_shift, img_mod2_scale, img_mod2_gate = self.modulate_img(vec, img)
+        img_q, img_k, img_v, img_mod1_gate, img_mod2_shift, img_mod2_scale, img_mod2_gate = self.modulate_img(vec, img, gamma, beta)
 
         
         b, s, h, d = img_q.shape
@@ -272,7 +280,7 @@ class MMDoubleStreamBlock(nn.Module):
         
         img_q = img_q.reshape(s, h, d)
         img_k = img_k.reshape(s, h, d)
-        #cos_sin_cache = torch.cat([freqs_cis[0], freqs_cis[1]], dim=1)
+        
         flashinfer.rope.apply_rope_with_cos_sin_cache_inplace(
             pos,
             img_q,
@@ -284,15 +292,7 @@ class MMDoubleStreamBlock(nn.Module):
         img_q = img_q.reshape(b, s, h, d)
         img_k = img_k.reshape(b, s, h, d)
         
-        # print(sin_cos_cache.shape)
-        # exit(0)
-        # if freqs_cis is not None:
-        #     img_qq, img_kk = apply_rotary_emb(img_q, img_k, freqs_cis, head_first=False)
-        #     assert (
-        #             img_qq.shape == img_q.shape and img_kk.shape == img_k.shape
-        #     ), f"img_kk: {img_qq.shape}, img_q: {img_q.shape}, img_kk: {img_kk.shape}, img_k: {img_k.shape}"
-        #     img_q, img_k = img_qq, img_kk
-
+        
         img_attn, img_attn_prope = sequence_parallel_attention_vision(
             (img_q, img_q_prope),
             (img_k, img_k_prope),
@@ -309,9 +309,15 @@ class MMDoubleStreamBlock(nn.Module):
         img_attn_prope = img_attn_prope.reshape(b, s, h * d)
         img = img + apply_gate(self.img_attn_proj(img_attn) + self.img_attn_prope_proj(img_attn_prope),
                                gate=img_mod1_gate)
+
+
+        
         img = img + apply_gate(
             self.img_mlp(
-                modulate(self.img_norm2(img), shift=img_mod2_shift, scale=img_mod2_scale)
+                modulate(
+                flashinfer.norm.layernorm(img.contiguous()[0], gamma, beta).unsqueeze(0), 
+                shift=img_mod2_shift, 
+                scale=img_mod2_scale)
             ),
             gate=img_mod2_gate,
         )
@@ -851,7 +857,8 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
         self.pos = None
         self.max_rope_temporal_size = 32
         self.head_dim = self.hidden_size // self.heads_num
-        
+        self.gamma = None
+        self.beta = None
     def load_hunyuan_state_dict(self, model_path):
         load_key = "module"
         bare_model = "unknown"
@@ -1154,7 +1161,8 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
             freqs_sin = freqs_sin.to(hidden_states.device)
             self.cos_sin_cache = torch.cat([freqs_cos, freqs_sin], dim=1)
             self.pos = torch.arange(0, freqs_cos.shape[0], dtype=torch.int32, device=freqs_cos.device)
-            
+            self.gamma = torch.ones(self.hidden_size, dtype=torch.float32, device=freqs_cos.device)
+            self.beta = torch.zeros(self.hidden_size, dtype=torch.float32, device=freqs_cos.device)
         
         per_latent_size = th * tw
         start_index = start_rope_start_idx * per_latent_size
@@ -1222,6 +1230,8 @@ class HunyuanVideo_1_5_DiffusionTransformer(ModelMixin, ConfigMixin):
                 Mq=Mq,
                 Mkv=Mkv,
                 Mo=Mo,
+                gamma=self.gamma,
+                beta=self.beta,
                 freqs_cis=self.cos_sin_cache,
                 pos=pos,
                 attn_param=self.attn_param,

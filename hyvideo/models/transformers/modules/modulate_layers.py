@@ -20,6 +20,10 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 
+@torch.compile
+def f(x, scale, shift):
+    return x * (1 + scale) + shift
+
 class ModulateDiT(nn.Module):
     """Modulation layer for DiT."""
 
@@ -53,6 +57,7 @@ def modulate(x, shift=None, scale=None):
     Returns:
         torch.Tensor: the output tensor after modulate.
     """
+    
     if scale is None and shift is None:
         return x
     elif shift is None:
@@ -81,10 +86,12 @@ def modulate(x, shift=None, scale=None):
 
         latent_length = shift.shape[1]  # latent length
         token_length = x.shape[1] // latent_length
-
-        scale = scale.repeat_interleave(token_length, dim=1).type_as(x)
-        shift = shift.repeat_interleave(token_length, dim=1).type_as(x)
-        return x * (1 + scale) + shift
+        print(latent_length, token_length)
+       
+        if token_length > 1:
+            scale = scale.repeat_interleave(token_length, dim=1).type_as(x)
+            shift = shift.repeat_interleave(token_length, dim=1).type_as(x)
+        return f(x, scale, shift)
 
 
 def apply_gate(x, gate=None, tanh=False):
@@ -104,7 +111,11 @@ def apply_gate(x, gate=None, tanh=False):
     gate = rearrange(gate, 'B (N T) C -> (B N) T C', N=x.shape[0])
     latent_length = gate.shape[1]  # latent length
     token_length = x.shape[1] // latent_length
-    gate = gate.repeat_interleave(token_length, dim=1).type_as(x)
+    print(latent_length, token_length)
+    exit(0)
+    if token_length > 1:
+        gate = gate.repeat_interleave(token_length, dim=1).type_as(x)
+    
     if tanh:
         return x * gate.tanh()
     else:
